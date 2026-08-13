@@ -10,6 +10,7 @@
     }
   ],
   "functions": {
-    "api/analyze.js": {"includeFiles":"node_modules/tesseract.js-core/**"}
+    "api/analyze.js": {"includeFiles":"node_modules/tesseract.js-core/**"},
+    "api/run.js": {"includeFiles":"node_modules/tesseract.js-core/**"}
   }
 }
