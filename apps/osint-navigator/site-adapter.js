@@ -13,7 +13,22 @@
     emit('osint:reset',{generation});
     return {generation,controller};
   }
-  function fileToDataUrl(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error||new Error('File read failed'));r.readAsDataURL(file);});}
+  function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error||new Error('File read failed'));r.readAsDataURL(blob);});}
+  async function fileToDataUrl(file){
+    if(!file||!/^image\/(jpeg|png|webp)$/i.test(file.type||'')) throw new Error('Obsługiwane: JPG, PNG, WEBP.');
+    if(file.size>12*1024*1024) throw new Error('Zdjęcie przekracza 12 MB.');
+    if(file.size<=2.5*1024*1024) return blobToDataUrl(file);
+    try{
+      const bmp=await createImageBitmap(file);
+      const max=1600,scale=Math.min(1,max/Math.max(bmp.width,bmp.height));
+      const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bmp.width*scale));canvas.height=Math.max(1,Math.round(bmp.height*scale));
+      canvas.getContext('2d',{alpha:false}).drawImage(bmp,0,0,canvas.width,canvas.height);bmp.close?.();
+      let blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.82));
+      if(blob?.size>3.2*1024*1024) blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.68));
+      if(!blob||blob.size>3.5*1024*1024) throw new Error('Nie udało się zmniejszyć zdjęcia do limitu API.');
+      return blobToDataUrl(blob);
+    }catch(e){if(file.size<=3.2*1024*1024)return blobToDataUrl(file);throw e;}
+  }
 
   async function analyze({url,file}={}){
     const ctx=resetCurrent();
