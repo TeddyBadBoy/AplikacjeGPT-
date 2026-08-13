@@ -1,9 +1,17 @@
 (()=>{
   const API='https://osint-navigator-engine.vercel.app/api/run';
-  let controller=null;
+  // Vercel rejects request bodies over 4.5 MB at the edge (413, no CORS headers, function never
+  // invoked). base64 costs 4/3, so cap the BINARY we inline: 3 MB -> ~4.19 MB of JSON.
+  const MAX_INLINE_BYTES=3*1024*1024;
+  const MAX_SOURCE_BYTES=12*1024*1024;
+  const MAX_EDGE=1600;
+
   let generation=0;
   let inputKey='';
-  let runningKey='';
+  let controller=null;
+  // Identity token of the single run allowed to write state. Anything that supersedes a run
+  // replaces this; a superseded run can then never emit a result, whatever order it finishes in.
+  let activeRun=null;
 
   function emit(name,detail){window.dispatchEvent(new CustomEvent(name,{detail}));}
   function keyFor({url,file}={}){
@@ -20,86 +28,133 @@
   function abortPrevious(reason='superseded'){
     if(controller){try{controller.abort(reason);}catch{}}
     controller=null;
-    runningKey='';
   }
+  // Advisory: called from an input's onChange. It must be a no-op when the key is unchanged,
+  // otherwise a re-render during an in-flight run would abort the run that just started.
   function inputChanged(input={}){
     const next=keyFor(input);
     if(!next||next===inputKey) return {changed:false,generation};
     generation+=1;
     inputKey=next;
+    activeRun=null;
     abortPrevious('input-changed');
     clearVisibleState('input-changed');
     return {changed:true,generation};
   }
-  function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error||new Error('File read failed'));r.readAsDataURL(blob);});}
+
+  function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error||new Error('Nie udało się odczytać pliku.'));r.readAsDataURL(blob);});}
+  async function downscale(file){
+    let bitmap;
+    // imageOrientation must be explicit: without it older Chrome/Android ignores the EXIF
+    // orientation flag and a portrait phone photo reaches the OCR rotated 90 degrees.
+    try{bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});}
+    catch{
+      try{bitmap=await createImageBitmap(file);}
+      catch{throw new Error('Przeglądarka nie potrafi zdekodować tego zdjęcia.');}
+    }
+    const scale=Math.min(1,MAX_EDGE/Math.max(bitmap.width,bitmap.height));
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+    canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+    const ctx=canvas.getContext('2d',{alpha:false});
+    if(!ctx){bitmap.close?.();throw new Error('Brak kontekstu canvas 2D.');}
+    ctx.fillStyle='#000';ctx.fillRect(0,0,canvas.width,canvas.height); // flatten PNG alpha
+    ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+    bitmap.close?.();
+    for(const quality of [0.82,0.68,0.5]){
+      const blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',quality));
+      if(blob&&blob.size<=MAX_INLINE_BYTES) return blob;
+    }
+    throw new Error('Nie udało się zmniejszyć zdjęcia poniżej limitu API.');
+  }
   async function fileToDataUrl(file){
-    if(!file||!/^image\/(jpeg|png|webp)$/i.test(file.type||'')) throw new Error('Obsługiwane: JPG, PNG, WEBP.');
-    if(file.size>12*1024*1024) throw new Error('Zdjęcie przekracza 12 MB.');
-    if(file.size<=2.5*1024*1024) return blobToDataUrl(file);
-    try{
-      const bmp=await createImageBitmap(file);
-      const max=1600,scale=Math.min(1,max/Math.max(bmp.width,bmp.height));
-      const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bmp.width*scale));canvas.height=Math.max(1,Math.round(bmp.height*scale));
-      canvas.getContext('2d',{alpha:false}).drawImage(bmp,0,0,canvas.width,canvas.height);bmp.close?.();
-      let blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.82));
-      if(blob?.size>3.2*1024*1024) blob=await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.68));
-      if(!blob||blob.size>3.5*1024*1024) throw new Error('Nie udało się zmniejszyć zdjęcia do limitu API.');
-      return blobToDataUrl(blob);
-    }catch(e){if(file.size<=3.2*1024*1024)return blobToDataUrl(file);throw e;}
+    const type=String(file?.type||'').toLowerCase();
+    if(!/^image\/(jpeg|png|webp)$/.test(type)){
+      throw new Error(/hei[cf]/.test(type)
+        ? 'HEIC/HEIF nie jest obsługiwany. Ustaw w aparacie format JPEG.'
+        : 'Obsługiwane formaty: JPG, PNG, WEBP.');
+    }
+    if(file.size>MAX_SOURCE_BYTES) throw new Error('Zdjęcie przekracza 12 MB.');
+    // Under budget: send the original bytes so EXIF (including GPS) survives. Re-encoding
+    // through canvas strips EXIF and destroys the highest-confidence coordinate source.
+    if(file.size<=MAX_INLINE_BYTES) return blobToDataUrl(file);
+    return blobToDataUrl(await downscale(file));
   }
 
   async function analyze({url,file}={}){
     const cleanUrl=typeof url==='string'?url.trim():'';
-    if(Boolean(cleanUrl)===Boolean(file)) throw new Error('Podaj dokładnie jeden nowy link albo jedno nowe zdjęcie.');
     const nextKey=keyFor({url:cleanUrl,file});
 
-    // Reset only when the INPUT really changed. Do not reset a second time on submit.
-    if(nextKey!==inputKey){
-      generation+=1;
-      inputKey=nextKey;
-      abortPrevious('new-run-input');
-      clearVisibleState('new-run-input');
-    }else{
-      // Same input may be retried; abort only an older request for the same input.
-      abortPrevious('retry-same-input');
-    }
-
+    // Every submit is a new run: bump the generation, take a fresh token, drop the visible
+    // result. Re-running the same input is still a new run, so it still clears the screen.
+    generation+=1;
     const runGeneration=generation;
-    const runKey=nextKey;
-    controller=new AbortController();
-    runningKey=runKey;
-    const localController=controller;
+    const token={};
+    activeRun=token;
+    inputKey=nextKey;
+    abortPrevious('superseded');
+    clearVisibleState('new-run');
+    const isCurrent=()=>activeRun===token;
 
-    const body=cleanUrl?{url:cleanUrl}:{image_data:await fileToDataUrl(file)};
-    // If input changed during expensive image conversion, do not send a stale request.
-    if(runGeneration!==generation||runKey!==inputKey) return {ignored:true,reason:'stale-before-send'};
+    const fail=message=>{
+      if(isCurrent()) emit('osint:error',{message,generation:runGeneration});
+      const error=new Error(message);
+      error.runGeneration=runGeneration;
+      throw error;
+    };
+
+    if(Boolean(cleanUrl)===Boolean(file)) fail('Podaj dokładnie jeden nowy link albo jedno nowe zdjęcie.');
+
+    let body;
+    try{
+      body=cleanUrl?{url:cleanUrl}:{image_data:await fileToDataUrl(file)};
+    }catch(e){
+      if(!isCurrent()) return {ignored:true,reason:'superseded-during-encode'};
+      fail(e?.message||String(e));
+    }
+    // Image encoding can take seconds; if a newer input landed meanwhile, stop here.
+    if(!isCurrent()) return {ignored:true,reason:'superseded-before-send'};
 
     sessionStorage.setItem('osint.currentInput',JSON.stringify({kind:cleanUrl?'url':'file',value:cleanUrl||file?.name||'upload'}));
-    emit('osint:loading',{generation:runGeneration,input:body.url||file?.name||'upload'});
+    emit('osint:loading',{generation:runGeneration,input:cleanUrl||file?.name||'upload'});
 
+    // The controller is created AFTER the slow encode. Creating it earlier left a window in
+    // which the run could abort the request it was about to make, so no POST ever left the page.
+    const localController=new AbortController();
+    controller=localController;
+
+    let response,raw;
     try{
-      const r=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:localController.signal,cache:'no-store'});
-      const j=await r.json();
-      if(runGeneration!==generation||runKey!==inputKey||runningKey!==runKey) return {ignored:true,reason:'stale-response'};
-      if(!r.ok) throw new Error(j.error||'Analiza nie powiodła się');
-      sessionStorage.setItem('osint.currentRun',JSON.stringify(j));
-      emit('osint:result',j);
-      return j;
+      response=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:localController.signal,cache:'no-store',mode:'cors',credentials:'omit'});
+      raw=await response.text();
     }catch(e){
-      if(e?.name==='AbortError'||localController.signal.aborted){
-        // Superseded analyses are normal control flow, never a user-visible failure.
-        return {ignored:true,reason:'aborted-superseded'};
-      }
-      if(runGeneration===generation&&runKey===inputKey) emit('osint:error',{message:e.message||String(e),generation:runGeneration});
-      throw e;
+      if(localController.signal.aborted||e?.name==='AbortError') return {ignored:true,reason:'aborted-superseded'};
+      if(!isCurrent()) return {ignored:true,reason:'superseded-during-fetch'};
+      fail(`Brak połączenia z silnikiem analizy (${e?.message||e}). Sprawdź CORS lub rozmiar żądania.`);
     }finally{
       if(controller===localController) controller=null;
-      if(runningKey===runKey) runningKey='';
     }
+
+    if(!isCurrent()) return {ignored:true,reason:'stale-response'};
+
+    let payload=null;
+    try{payload=JSON.parse(raw);}catch{}
+    if(!payload){
+      // 413 comes from the Vercel edge as text/plain with no CORS headers: the function is
+      // never invoked, so this failure is invisible in the runtime log.
+      fail(response.status===413
+        ? 'Zdjęcie jest za duże dla API (limit żądania 4.5 MB). Wyślij mniejsze zdjęcie.'
+        : `Silnik zwrócił odpowiedź spoza JSON (HTTP ${response.status}).`);
+    }
+    if(!response.ok) fail(payload.error||`Analiza nie powiodła się (HTTP ${response.status}).`);
+
+    sessionStorage.setItem('osint.currentRun',JSON.stringify(payload));
+    emit('osint:result',payload);
+    return payload;
   }
 
   function current(){try{return JSON.parse(sessionStorage.getItem('osint.currentRun')||'null');}catch{return null;}}
-  function cancel(){generation+=1;abortPrevious('manual-cancel');clearVisibleState('manual-cancel');}
+  function cancel(){generation+=1;inputKey='';activeRun=null;abortPrevious('manual-cancel');clearVisibleState('manual-cancel');}
 
   window.OSINTNavigatorFreshRun={analyze,current,cancel,inputChanged,api:API};
 })();
