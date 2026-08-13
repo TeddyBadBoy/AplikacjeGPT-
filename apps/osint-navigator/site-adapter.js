@@ -1,5 +1,5 @@
 (()=>{
-  const API='https://osint-navigator-live-v2.vercel.app/api/run';
+  const API='https://osint-navigator-engine.vercel.app/api/run';
   let controller=null;
   let generation=0;
 
