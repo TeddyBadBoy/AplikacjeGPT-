@@ -1,0 +1,20 @@
+{
+  "suite": "photo-streetview-tree-matcher",
+  "version": 1,
+  "cases": [
+    {
+      "id": "tree-baszta-001",
+      "reference_url": "https://ksalnnh.net/pr/48cb07b7630f2a9efee3bf105dde3754dad357b68ee520729dd7c89668b5be68.jpg",
+      "expected_coordinates": [52.1914531, 21.0060642],
+      "expected_status": "CANDIDATE",
+      "notes": "Known baseline. Street View visual hypothesis: 3rd tree from right stronger than 4th; verify by entrance/building/path geometry before GIS proximity."
+    },
+    {
+      "id": "tree-regression-002",
+      "reference_url": "https://ksalnnh.net/pr/d823c82e185d66f66d9c80190fe9eeb9641c28c52be57003258f43f64c4f7438.jpg",
+      "expected_coordinates": null,
+      "expected_status": "PENDING_ANALYSIS",
+      "notes": "New user-provided regression case. Run image text/EXIF extraction, visual landmark fingerprinting, Street View candidate ranking, background/building geometry, then GIS only as secondary evidence."
+    }
+  ]
+}
