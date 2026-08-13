@@ -82,10 +82,11 @@ async function fetchTrees(layer,lat,lon,radius){
 
 export default async function handler(req,res){
   res.setHeader('Cache-Control','no-store');
-  if(req.method!=='POST'){ res.setHeader('Allow','POST'); return res.status(405).json({error:'Method not allowed'}); }
+  if(!['GET','POST'].includes(req.method)){ res.setHeader('Allow','GET, POST'); return res.status(405).json({error:'Method not allowed'}); }
   try{
-    const lat=safeNum(req.body?.lat), lon=safeNum(req.body?.lon);
-    const radius=Math.max(5,Math.min(60,safeNum(req.body?.radius_m)??25));
+    const input=req.method==='GET'?req.query:(req.body||{});
+    const lat=safeNum(input.lat), lon=safeNum(input.lon);
+    const radius=Math.max(5,Math.min(60,safeNum(input.radius_m)??25));
     if(lat===null||lon===null||Math.abs(lat)>90||Math.abs(lon)>180) return res.status(400).json({error:'Invalid lat/lon'});
     const target={lat,lon};
     const layer=await getLayerName();
