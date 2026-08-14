@@ -58,10 +58,18 @@ const responseSchema={
         x:{type:['number','null'],minimum:0,maximum:1},
         y:{type:['number','null'],minimum:0,maximum:1},
         label:{type:'string'},
+        kind:{type:'string',enum:['POLE_BASE','TREE_BASE','BUILDING_POINT','PATH_POINT','OTHER']},
+        anchorType:{type:'string',enum:['GROUND_CONTACT_POINT','OBJECT_CENTER','SURFACE_POINT','OTHER']},
+        surface:{type:'string',enum:['GRASS','SOIL','CURB','PAVEMENT','ASPHALT','OTHER','UNKNOWN']},
+        touchesObject:{type:'boolean'},
+        groundContactPoint:{type:'boolean'},
+        markerOnAdjacentFlatSurface:{type:'boolean'},
+        occludedByVegetation:{type:'boolean'},
+        evidence:{type:'string'},
         state:{type:'string',enum:['MATCH','MISMATCH','NOT_VISIBLE']},
         confidence:{type:'integer',minimum:0,maximum:100}
       },
-      required:['x','y','label','state','confidence']
+      required:['x','y','label','kind','anchorType','surface','touchesObject','groundContactPoint','markerOnAdjacentFlatSurface','occludedByVegetation','evidence','state','confidence']
     },
     landmarks:{
       type:'array',
@@ -114,14 +122,53 @@ function countStrongStableMatches(result){
 function hasHardStableMismatch(result){
   return (result?.landmarks||[]).some(x=>x?.stable===true&&x?.state==='MISMATCH'&&Number(x?.confidence)>=80);
 }
+function isPoleBaseTarget(result){
+  const t=result?.target||{};
+  return t.kind==='POLE_BASE'||/(podstawa|zakotwiczenie|styk).*słup|słup.*(podstawa|zakotwiczenie|styk)|pole.*(base|ground contact)/i.test(String(t.label||''));
+}
+function evaluateTargetAnchor(result){
+  const t=result?.target||{};
+  const poleBase=isPoleBaseTarget(result);
+  if(!poleBase)return {required:false,valid:true,reason:null};
+  const valid=Boolean(
+    t.anchorType==='GROUND_CONTACT_POINT'&&
+    t.groundContactPoint===true&&
+    t.touchesObject===true&&
+    t.markerOnAdjacentFlatSurface!==true
+  );
+  let reason=null;
+  if(t.markerOnAdjacentFlatSurface===true)reason='Marker leży na płaskiej powierzchni obok słupa, nie w punkcie styku z podłożem.';
+  else if(t.anchorType!=='GROUND_CONTACT_POINT'||t.groundContactPoint!==true)reason='Nie potwierdzono dolnego punktu styku słupa z podłożem.';
+  else if(t.touchesObject!==true)reason='Marker nie styka się z wykrytym słupem.';
+  return {required:true,valid,reason};
+}
+function enforceTargetAnchor(result){
+  const anchor=evaluateTargetAnchor(result);
+  if(!anchor.required||anchor.valid)return result;
+  const target={...(result?.target||{})};
+  if(target.markerOnAdjacentFlatSurface===true){
+    target.state='MISMATCH';
+    target.confidence=Math.min(Number(target.confidence)||0,40);
+  }else if(target.state==='MATCH'){
+    target.state='NOT_VISIBLE';
+    target.confidence=Math.min(Number(target.confidence)||0,59);
+  }
+  const conflicts=[...(result?.conflicts||[])];
+  if(anchor.reason&&!conflicts.includes(anchor.reason))conflicts.push(anchor.reason);
+  return {...result,target,conflicts,needsEscalation:true};
+}
 export function evaluateVerification(result){
   const targetMatched=result?.target?.state==='MATCH'&&Number(result?.target?.confidence)>=70;
   const relationsMatched=result?.spatialRelations?.state==='MATCH'&&Number(result?.spatialRelations?.confidence)>=65;
   const stableMatches=countStrongStableMatches(result);
   const hardMismatch=hasHardStableMismatch(result);
+  const targetAnchor=evaluateTargetAnchor(result);
   return {
-    verified:Boolean(result?.samePlace&&Number(result?.confidence)>=85&&targetMatched&&stableMatches>=2&&relationsMatched&&!hardMismatch),
+    verified:Boolean(result?.samePlace&&Number(result?.confidence)>=85&&targetMatched&&stableMatches>=2&&relationsMatched&&!hardMismatch&&targetAnchor.valid),
     targetMatched,
+    targetAnchorValid:targetAnchor.valid,
+    targetAnchorRequired:targetAnchor.required,
+    targetAnchorReason:targetAnchor.reason,
     relationsMatched,
     stableMatches,
     hardMismatch
@@ -129,11 +176,11 @@ export function evaluateVerification(result){
 }
 
 function basePrompt({target_marker,target,last_position,telemetry}){
-  return `Jesteś modułem wizualnej nawigacji terenowej „OSTATNIE 5 METRÓW”.\n\nOBRAZ 1 = zdjęcie REFERENCYJNE miejsca.\nOBRAZ 2 = zdjęcie wykonane TERAZ przez użytkownika.\n\nCEL: ustal, czy oba obrazy pokazują ten sam fizyczny punkt lub bezpośrednie otoczenie w skali około 5 metrów oraz czy konkretny Target Object ze zdjęcia referencyjnego odpowiada obiektowi w aktualnym kadrze.\n\nNAJWAŻNIEJSZA ZASADA: BRAK WIDOCZNOŚCI NIE JEST NIEZGODNOŚCIĄ. Każdy landmark ma stan MATCH, MISMATCH albo NOT_VISIBLE. Jeżeli budynek jest częściowo zasłonięty krzewami/drzewami, szukaj fragmentów elewacji, krawędzi, dachów, okien i geometrii tła. Nie ustawiaj architecture=0 tylko dlatego, że budynek jest częściowo zasłonięty. MISMATCH oznacza rzeczywistą sprzeczność geometryczną lub cechową.\n\nPRIORYTET DOWODÓW: 1) architektura i geometria budynków, 2) chodniki/ścieżki/krawężniki i ich przebieg, 3) konkretne stałe obiekty (słupy, latarnie, ogrodzenia), 4) relacje przestrzenne między nimi, 5) roślinność wyłącznie jako dowód pomocniczy. Sam fakt istnienia „jakiegoś słupa” albo „krzewów” NIE wystarcza. Rozróżniaj wiele podobnych słupów.\n\nTARGET MARKER na OBRAZIE 1 (znormalizowane 0..1): ${JSON.stringify(target_marker||null)}. Jeżeli marker istnieje, traktuj obiekt pod tym punktem jako Target Object. Jeśli markeru brak, wybierz najbardziej specyficzny trwały anchor, ale nie podnoś przez to confidence.\n\nDla każdego ważnego landmarku zwróć bounding box na OBRAZIE 1 i OBRAZIE 2 w skali 0..1. Gdy niewidoczny: wszystkie współrzędne boxa = null. Pole relation ma opisywać konkretną relację, np. „słup przed zakrętem ścieżki, budynek za krzewami po lewej”.\n\nZignoruj ludzi, twarze, tablice rejestracyjne, pojazdy, pogodę, porę dnia, światło i cienie. Roślinność może się zmieniać sezonowo.\n\nGPS i telemetria NIE mogą podnosić confidence wizualnego. Są tylko diagnostyką: target GPS=${JSON.stringify(target||null)}, last_position=${JSON.stringify(last_position||null)}, telemetry=${JSON.stringify(telemetry||null)}. Nie licz metrów ani bearing.\n\nCONFIDENCE: 85+ tylko gdy Target Object pasuje, co najmniej dwa niezależne trwałe landmarki pasują oraz zgadzają się ich relacje przestrzenne. 60-84 = możliwe miejsce, wymaga kolejnego zdjęcia/drugiej opinii. Poniżej 60 = nie zgaduj. hint po polsku, maks. 12 słów, konkretna instrukcja zmiany kadru.\n\nJeżeli widzisz prawdziwą sprzeczność w trwałej architekturze lub geometrii, wypisz ją w conflicts i obniż confidence.`;
+  return `Jesteś modułem wizualnej nawigacji terenowej „OSTATNIE 5 METRÓW”.\n\nOBRAZ 1 = zdjęcie REFERENCYJNE miejsca.\nOBRAZ 2 = zdjęcie wykonane TERAZ przez użytkownika.\n\nCEL: ustal, czy oba obrazy pokazują ten sam fizyczny punkt lub bezpośrednie otoczenie w skali około 5 metrów oraz czy konkretny Target Object ze zdjęcia referencyjnego odpowiada obiektowi w aktualnym kadrze.\n\nNAJWAŻNIEJSZA ZASADA: BRAK WIDOCZNOŚCI NIE JEST NIEZGODNOŚCIĄ. Każdy landmark ma stan MATCH, MISMATCH albo NOT_VISIBLE. Jeżeli budynek jest częściowo zasłonięty krzewami/drzewami, szukaj fragmentów elewacji, krawędzi, dachów, okien i geometrii tła. Nie ustawiaj architecture=0 tylko dlatego, że budynek jest częściowo zasłonięty. MISMATCH oznacza rzeczywistą sprzeczność geometryczną lub cechową.\n\nPRIORYTET DOWODÓW: 1) architektura i geometria budynków, 2) chodniki/ścieżki/krawężniki i ich przebieg, 3) konkretne stałe obiekty (słupy, latarnie, ogrodzenia), 4) relacje przestrzenne między nimi, 5) roślinność wyłącznie jako dowód pomocniczy. Sam fakt istnienia „jakiegoś słupa” albo „krzewów” NIE wystarcza. Rozróżniaj wiele podobnych słupów.\n\nTARGET MARKER na OBRAZIE 1 (znormalizowane 0..1): ${JSON.stringify(target_marker||null)}. Jeżeli marker istnieje, traktuj obiekt pod tym punktem jako Target Object. Jeśli markeru brak, wybierz najbardziej specyficzny trwały anchor, ale nie podnoś przez to confidence.\n\nSPECJALNA REGUŁA DLA PODSTAWY SŁUPA / POLE BASE:\n- Jeśli target na obrazie referencyjnym wskazuje podstawę pionowego metalowego słupa, ustaw target.kind=POLE_BASE i target.anchorType=GROUND_CONTACT_POINT.\n- Targetem NIE jest cały słup ani obszar obok niego. Targetem jest WYŁĄCZNIE dolny punkt styku osi słupa z ziemią/trawą/krawężnikiem/podłożem.\n- Najpierw wykryj krawędzie pionowego słupa, wyznacz jego oś i śledź ją w dół aż do punktu zakotwiczenia. target.x ma leżeć na osi lub bezpośrednio przy osi słupa, a target.y na jego najniższym punkcie styku z podłożem.\n- NIE stawiaj markera na pustym asfalcie, jezdni, chodniku ani innej płaskiej powierzchni obok słupa. Jeśli proponowany marker leży obok obiektu, ustaw markerOnAdjacentFlatSurface=true.\n- Jeśli słup rzeczywiście jest osadzony w asfalcie, surface=ASPHALT jest dozwolone TYLKO gdy marker jednocześnie dotyka słupa i jest jego rzeczywistym ground contact point. Sam asfalt obok słupa nie jest targetem.\n- Jeśli dół słupa jest częściowo zasłonięty trawą, możesz ekstrapolować pionową oś do styku z ziemią tylko wtedy, gdy kontynuacja jest jednoznaczna. Ustaw occludedByVegetation=true i opisz dowód w evidence.\n- Jeśli punkt zakotwiczenia nie jest wystarczająco widoczny ani jednoznacznie wyznaczalny, zwróć target.state=NOT_VISIBLE, targetVisible=false i x/y=null. NIE zgaduj.\n- Dla POLE_BASE wynik MATCH wymaga równocześnie: anchorType=GROUND_CONTACT_POINT, groundContactPoint=true, touchesObject=true oraz markerOnAdjacentFlatSurface=false.\n\nDla każdego ważnego landmarku zwróć bounding box na OBRAZIE 1 i OBRAZIE 2 w skali 0..1. Gdy niewidoczny: wszystkie współrzędne boxa = null. Pole relation ma opisywać konkretną relację, np. „słup przed zakrętem ścieżki, budynek za krzewami po lewej”.\n\nZignoruj ludzi, twarze, tablice rejestracyjne, pojazdy, pogodę, porę dnia, światło i cienie. Roślinność może się zmieniać sezonowo.\n\nGPS i telemetria NIE mogą podnosić confidence wizualnego. Są tylko diagnostyką: target GPS=${JSON.stringify(target||null)}, last_position=${JSON.stringify(last_position||null)}, telemetry=${JSON.stringify(telemetry||null)}. Nie licz metrów ani bearing.\n\nCONFIDENCE: 85+ tylko gdy Target Object pasuje, co najmniej dwa niezależne trwałe landmarki pasują oraz zgadzają się ich relacje przestrzenne. 60-84 = możliwe miejsce, wymaga kolejnego zdjęcia/drugiej opinii. Poniżej 60 = nie zgaduj. hint po polsku, maks. 12 słów, konkretna instrukcja zmiany kadru.\n\nJeżeli widzisz prawdziwą sprzeczność w trwałej architekturze lub geometrii, wypisz ją w conflicts i obniż confidence.`;
 }
 
 async function callGemini({model,prompt,reference,current,prior=null}){
-  const fullPrompt=prior?`${prompt}\n\nTo jest DRUGA OPINIA. Wynik pierwszego modelu: ${JSON.stringify(prior)}. Oceń obrazy samodzielnie. Nie kopiuj confidence pierwszego modelu. Jeśli pierwszy model pomylił NOT_VISIBLE z MISMATCH, popraw to.`:prompt;
+  const fullPrompt=prior?`${prompt}\n\nTo jest DRUGA OPINIA. Wynik pierwszego modelu: ${JSON.stringify(prior)}. Oceń obrazy samodzielnie. Nie kopiuj confidence pierwszego modelu. Jeśli pierwszy model pomylił NOT_VISIBLE z MISMATCH albo umieścił punkt POLE_BASE na płaskiej powierzchni obok słupa, popraw to.`:prompt;
   const apiResponse=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
     method:'POST',
     headers:{'x-goog-api-key':process.env.GEMINI_API_KEY,'content-type':'application/json'},
@@ -156,7 +203,8 @@ async function callGemini({model,prompt,reference,current,prior=null}){
 
 function shouldEscalate(primary){
   const c=Number(primary?.confidence)||0;
-  return Boolean(primary?.needsEscalation||(c>=60&&c<85)||hasHardStableMismatch(primary)||(primary?.conflicts||[]).length>0);
+  const anchor=evaluateTargetAnchor(primary);
+  return Boolean(primary?.needsEscalation||(c>=60&&c<85)||hasHardStableMismatch(primary)||(primary?.conflicts||[]).length>0||!anchor.valid);
 }
 
 export default async function handler(req,res){
@@ -168,14 +216,17 @@ export default async function handler(req,res){
   try{
     const [reference,current]=await Promise.all([loadImage(reference_image),loadImage(current_image)]);
     const prompt=basePrompt({target_marker,target,last_position,telemetry});
-    const primary=await callGemini({model:PRIMARY_MODEL,prompt,reference,current});
+    let primary=await callGemini({model:PRIMARY_MODEL,prompt,reference,current});
+    primary=enforceTargetAnchor(primary);
     const primaryGate=evaluateVerification(primary);
 
     let secondary=null;
     let escalationError=null;
     if(shouldEscalate(primary)){
-      try{secondary=await callGemini({model:ESCALATION_MODEL,prompt,reference,current,prior:primary});}
-      catch(e){escalationError=e.message;}
+      try{
+        secondary=await callGemini({model:ESCALATION_MODEL,prompt,reference,current,prior:primary});
+        secondary=enforceTargetAnchor(secondary);
+      }catch(e){escalationError=e.message;}
     }
 
     let result=secondary||primary;
