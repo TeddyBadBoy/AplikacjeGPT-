@@ -5,7 +5,7 @@
   "type": "module",
   "engines": {"node": ">=20"},
   "scripts": {
-    "test": "node tests/state-machine.test.mjs && node tests/vision-gate.test.mjs",
+    "test": "node tests/state-machine.test.mjs && node tests/vision-gate.test.mjs && node tests/index-syntax.test.mjs",
     "test:live": "node tests/live-cases.test.mjs"
   },
   "dependencies": {
