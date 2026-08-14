@@ -1,11 +1,11 @@
 {
   "name": "osint-navigator-live-v2",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "engines": {"node": ">=20"},
   "scripts": {
-    "test": "node tests/state-machine.test.mjs",
+    "test": "node tests/state-machine.test.mjs && node tests/vision-gate.test.mjs",
     "test:live": "node tests/live-cases.test.mjs"
   },
   "dependencies": {
