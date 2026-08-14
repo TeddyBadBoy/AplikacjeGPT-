@@ -1,0 +1,28 @@
+name: OSINT Navigator Last 5 M
+
+on:
+  pull_request:
+    paths:
+      - 'apps/osint-navigator/**'
+      - '.github/workflows/osint-last5-test.yml'
+  push:
+    branches:
+      - osint-last5-v2
+    paths:
+      - 'apps/osint-navigator/**'
+      - '.github/workflows/osint-last5-test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/osint-navigator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - run: node --check api/vision.js
