@@ -14,42 +14,72 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
+    private lateinit var input: EditText
+    private lateinit var status: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val input = findViewById<EditText>(R.id.appNameInput)
+        input = findViewById(R.id.appNameInput)
         val button = findViewById<Button>(R.id.executeButton)
-        val status = findViewById<TextView>(R.id.statusText)
+        status = findViewById(R.id.statusText)
 
         button.setOnClickListener {
-            val query = input.text.toString().trim()
-            if (query.isBlank()) {
-                status.text = "Podaj nazwę aplikacji."
-                return@setOnClickListener
-            }
+            executeApp(input.text.toString())
+        }
 
-            val match = findLaunchableApp(query)
-            if (match == null) {
-                status.text = "Nie znalazłem aplikacji: $query"
-                return@setOnClickListener
-            }
+        handleIncomingIntent(intent)
+    }
 
-            val appLabel = match.loadLabel(packageManager).toString()
-            val launchIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                setClassName(match.activityInfo.packageName, match.activityInfo.name)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
 
-            status.text = "Uruchamiam: $appLabel"
-            try {
-                startActivity(launchIntent)
-            } catch (e: ActivityNotFoundException) {
-                status.text = "Nie mogę uruchomić: $appLabel"
-            } catch (e: SecurityException) {
-                status.text = "Android zablokował uruchomienie: $appLabel"
-            }
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        if (uri.scheme != "aiexecutor" || uri.host != "open") return
+
+        val appName = uri.getQueryParameter("app").orEmpty().trim()
+        if (appName.isBlank()) {
+            status.text = "Brak parametru app."
+            return
+        }
+
+        input.setText(appName)
+        executeApp(appName)
+    }
+
+    private fun executeApp(rawQuery: String) {
+        val query = rawQuery.trim()
+        if (query.isBlank()) {
+            status.text = "Podaj nazwę aplikacji."
+            return
+        }
+
+        val match = findLaunchableApp(query)
+        if (match == null) {
+            status.text = "Nie znalazłem aplikacji: $query"
+            return
+        }
+
+        val appLabel = match.loadLabel(packageManager).toString()
+        val launchIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            setClassName(match.activityInfo.packageName, match.activityInfo.name)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        status.text = "Uruchamiam: $appLabel"
+        try {
+            startActivity(launchIntent)
+        } catch (e: ActivityNotFoundException) {
+            status.text = "Nie mogę uruchomić: $appLabel"
+        } catch (e: SecurityException) {
+            status.text = "Android zablokował uruchomienie: $appLabel"
         }
     }
 
