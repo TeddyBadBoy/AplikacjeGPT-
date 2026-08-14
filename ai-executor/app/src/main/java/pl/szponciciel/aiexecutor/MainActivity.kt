@@ -1,6 +1,7 @@
 package pl.szponciciel.aiexecutor
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
@@ -42,7 +43,13 @@ class MainActivity : Activity() {
             }
 
             status.text = "Uruchamiam: $appLabel"
-            startActivity(launchIntent)
+            try {
+                startActivity(launchIntent)
+            } catch (e: ActivityNotFoundException) {
+                status.text = "Nie mogę uruchomić: $appLabel"
+            } catch (e: SecurityException) {
+                status.text = "Android zablokował uruchomienie: $appLabel"
+            }
         }
     }
 
