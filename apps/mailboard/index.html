@@ -1,11 +1,132 @@
 <!doctype html>
-<html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADHD MailBoard</title>
-<style>body{font-family:system-ui;margin:0;background:#111;color:#eee}header{padding:16px;position:sticky;top:0;background:#111}#alarm{padding:10px;background:#5b1111;border-radius:10px}.board{display:grid;grid-template-columns:repeat(4,minmax(260px,1fr));gap:12px;padding:16px;overflow:auto}.col{background:#1d1d1d;border-radius:12px;padding:10px;min-height:70vh}.card{background:#292929;margin:8px 0;padding:12px;border-radius:10px;border-left:6px solid #777}.critical{border-color:#f33}.high{border-color:#f90}.normal{border-color:#49f}.low{border-color:#777}.overdue{outline:2px solid #f33}.meta{font-size:12px;opacity:.75}</style></head>
-<body><header><h1>ADHD MailBoard</h1><div id="alarm">Ładowanie alarmów…</div></header><main class="board" id="board"></main>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADHD MailBoard</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#111;color:#eee}header{padding:14px 16px;position:sticky;top:0;background:#111;z-index:5;border-bottom:1px solid #2c2c2c}h1{margin:0 0 10px;font-size:22px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}select{background:#202020;color:#eee;border:1px solid #444;border-radius:8px;padding:7px 9px}#alarm{padding:9px 11px;background:#5b1111;border-radius:9px;flex:1;min-width:220px}.board{display:grid;grid-template-columns:repeat(4,minmax(260px,1fr));gap:12px;padding:16px;overflow:auto}.col{background:#1d1d1d;border-radius:12px;padding:10px;min-height:70vh}.col h2{font-size:17px;margin:3px 2px 10px}.card{background:#292929;margin:8px 0;padding:12px;border-radius:10px;border-left:6px solid #777}.critical{border-color:#f33}.high{border-color:#f90}.normal{border-color:#49f}.low{border-color:#777}.overdue{outline:2px solid #f33}.title{margin:5px 0 8px}.meta{font-size:12px;opacity:.82;line-height:1.5}.chips{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}.chip{font-size:11px;padding:3px 7px;border-radius:999px;background:#3a3a3a}.source-email{background:#173b5f}.source-jira{background:#2f265e}.epic-row{display:flex;gap:6px;align-items:center;margin-top:8px}.epic-row label{font-size:11px;opacity:.7}.epic-row select{min-width:0;max-width:100%;font-size:12px;padding:5px 7px}.empty{font-size:12px;opacity:.55;padding:8px}.status{font-size:11px;opacity:.6}
+@media(max-width:760px){header{position:static}.board{grid-template-columns:repeat(4,82vw);scroll-snap-type:x proximity}.col{scroll-snap-align:start}}
+</style>
+</head>
+<body>
+<header>
+  <h1>ADHD MailBoard</h1>
+  <div class="toolbar">
+    <div id="alarm">Ładowanie alarmów…</div>
+    <select id="epicFilter" aria-label="Filtr Epic"><option value="">Wszystkie Epiki</option><option value="__none__">Bez Epica</option></select>
+    <span class="status" id="dataStatus"></span>
+  </div>
+</header>
+<main class="board" id="board"></main>
 <script>
 const columns=['Backlog','Do zrobienia','W toku','Gotowe'];
-const demo=[{key:'MAIL-2',title:'Przenieść najnowsze funkcjonalności i zmiany z Jira',status:'W toku',urgency:'Krytyczna',due:'2026-08-04'}];
+const STORAGE_KEY='adhd-mailboard-v2';
+
+// Dane demonstracyjne są neutralne. Prawdziwe wiadomości mają przyjść z backendu,
+// nigdy nie są wpisywane na stałe do publicznego repozytorium.
+const demoEpics=[
+  {id:'EPIC-ADHD',name:'ADHD System'},
+  {id:'EPIC-OSINT',name:'OSINT Navigator'}
+];
+const demoItems=[
+  {key:'MAIL-DEMO-1',title:'Przykładowy mail wymagający działania',status:'Do zrobienia',urgency:'Wysoka',due:'',source:'EMAIL',sender:'demo@example.com',threadId:'demo-thread',epicId:'EPIC-ADHD'},
+  {key:'TASK-DEMO-1',title:'Przykładowe zadanie Jira',status:'W toku',urgency:'Normalna',due:'',source:'JIRA',epicId:'EPIC-OSINT'}
+];
+
+let epics=[];
+let items=[];
+
+function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function rank(u){return {Krytyczna:0,Wysoka:1,Normalna:2,Niska:3}[u]??2}
-function render(items){const today=new Date().toISOString().slice(0,10);items.sort((a,b)=>rank(a.urgency)-rank(b.urgency));const alarms=items.filter(x=>x.status!=='Gotowe'&&x.due&&x.due<=today);document.querySelector('#alarm').textContent=alarms.length?`🔴 Alarmy: ${alarms.map(x=>x.key).join(', ')}`:'Brak czerwonych alarmów';const board=document.querySelector('#board');board.innerHTML='';columns.forEach(c=>{const col=document.createElement('section');col.className='col';col.innerHTML=`<h2>${c}</h2>`;items.filter(x=>x.status===c).forEach(x=>{const card=document.createElement('article');const overdue=x.due&&x.due<today&&x.status!=='Gotowe';card.className=`card ${String(x.urgency).toLowerCase().replace('krytyczna','critical').replace('wysoka','high').replace('normalna','normal').replace('niska','low')} ${overdue?'overdue':''}`;card.innerHTML=`<b>${x.key}</b><div>${x.title}</div><div class="meta">Pilność: ${x.urgency||'brak'} · Termin: ${x.due||'—'}</div>`;col.appendChild(card)});board.appendChild(col)})}
-render(demo);
-</script></body></html>
+function urgencyClass(u){return String(u||'Normalna').toLowerCase().replace('krytyczna','critical').replace('wysoka','high').replace('normalna','normal').replace('niska','low')}
+function getEpic(id){return epics.find(e=>String(e.id)===String(id))||null}
+function saveLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify({items,epics}))}
+function loadLocal(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'null')}catch{return null}}
+
+function setData(nextItems,nextEpics,{persist=true,status='dane lokalne'}={}){
+  items=Array.isArray(nextItems)?nextItems:[];
+  epics=Array.isArray(nextEpics)?nextEpics:[];
+  if(persist)saveLocal();
+  document.querySelector('#dataStatus').textContent=status;
+  renderEpicFilter();
+  render();
+}
+
+function renderEpicFilter(){
+  const select=document.querySelector('#epicFilter');
+  const current=select.value;
+  select.innerHTML='<option value="">Wszystkie Epiki</option><option value="__none__">Bez Epica</option>'+epics.map(e=>`<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join('');
+  if([...select.options].some(o=>o.value===current))select.value=current;
+}
+
+function filteredItems(){
+  const f=document.querySelector('#epicFilter').value;
+  if(!f)return [...items];
+  if(f==='__none__')return items.filter(x=>!x.epicId);
+  return items.filter(x=>String(x.epicId)===f);
+}
+
+function render(){
+  const today=new Date().toLocaleDateString('sv-SE');
+  const visible=filteredItems().sort((a,b)=>rank(a.urgency)-rank(b.urgency));
+  const alarms=visible.filter(x=>x.status!=='Gotowe'&&x.due&&x.due<=today);
+  document.querySelector('#alarm').textContent=alarms.length?`🔴 Alarmy: ${alarms.map(x=>x.key).join(', ')}`:'Brak czerwonych alarmów';
+  const board=document.querySelector('#board');board.innerHTML='';
+
+  columns.forEach(c=>{
+    const col=document.createElement('section');col.className='col';col.innerHTML=`<h2>${escapeHtml(c)}</h2>`;
+    const list=visible.filter(x=>x.status===c);
+    if(!list.length)col.insertAdjacentHTML('beforeend','<div class="empty">Brak elementów</div>');
+
+    list.forEach(x=>{
+      const card=document.createElement('article');
+      const overdue=x.due&&x.due<today&&x.status!=='Gotowe';
+      const source=String(x.source||'TASK').toUpperCase();
+      const epic=getEpic(x.epicId);
+      card.className=`card ${urgencyClass(x.urgency)} ${overdue?'overdue':''}`;
+      card.innerHTML=`
+        <b>${escapeHtml(x.key)}</b>
+        <div class="title">${escapeHtml(x.title)}</div>
+        <div class="chips">
+          <span class="chip ${source==='EMAIL'?'source-email':source==='JIRA'?'source-jira':''}">${escapeHtml(source)}</span>
+          ${epic?`<span class="chip">Epic: ${escapeHtml(epic.name)}</span>`:''}
+        </div>
+        <div class="meta">Pilność: ${escapeHtml(x.urgency||'brak')} · Termin: ${escapeHtml(x.due||'—')}${x.sender?`<br>Nadawca: ${escapeHtml(x.sender)}`:''}</div>
+        <div class="epic-row"><label>Epic</label><select data-item-key="${escapeHtml(x.key)}" aria-label="Przypisz Epic do ${escapeHtml(x.key)}">
+          <option value="">Bez Epica</option>
+          ${epics.map(e=>`<option value="${escapeHtml(e.id)}" ${String(e.id)===String(x.epicId)?'selected':''}>${escapeHtml(e.name)}</option>`).join('')}
+        </select></div>`;
+      col.appendChild(card);
+    });
+    board.appendChild(col);
+  });
+
+  board.querySelectorAll('select[data-item-key]').forEach(select=>select.addEventListener('change',e=>{
+    const item=items.find(i=>i.key===e.target.dataset.itemKey);
+    if(!item)return;
+    item.epicId=e.target.value||null;
+    saveLocal();
+    render();
+  }));
+}
+
+document.querySelector('#epicFilter').addEventListener('change',render);
+
+// Publiczny interfejs pod backend / integrację Superhuman + Jira.
+// Backend może wstrzyknąć bezpiecznie znormalizowane dane po zalogowaniu użytkownika.
+window.MailBoard={
+  setItems(nextItems,{persist=true,status='EMAIL/JIRA'}={}){setData(nextItems,epics,{persist,status})},
+  setEpics(nextEpics,{persist=true,status='Epiki'}={}){setData(items,nextEpics,{persist,status})},
+  setData(nextItems,nextEpics,options){setData(nextItems,nextEpics,options)},
+  getItems(){return structuredClone(items)},
+  getEpics(){return structuredClone(epics)},
+  clearLocal(){localStorage.removeItem(STORAGE_KEY);setData(demoItems,demoEpics,{persist:false,status:'demo'})}
+};
+
+const saved=loadLocal();
+if(saved&&Array.isArray(saved.items)&&Array.isArray(saved.epics))setData(saved.items,saved.epics,{persist:false,status:'dane lokalne'});
+else setData(demoItems,demoEpics,{persist:false,status:'demo'});
+</script>
+</body>
+</html>
