@@ -5,13 +5,15 @@ on:
     branches:
       - main
       - feat/ai-executor-v0.1
+    tags:
+      - 'v*'
     paths:
       - 'ai-executor/**'
       - '.github/workflows/ai-executor-build.yml'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -45,7 +47,21 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ai-executor-v0.1-debug-apk
+          name: ai-executor-debug-apk
           path: ai-executor/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Prepare release APK
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cp ai-executor/app/build/outputs/apk/debug/app-debug.apk "AI-Executor-${GITHUB_REF_NAME}-debug.apk"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          "AI-Executor-${GITHUB_REF_NAME}-debug.apk"
+          --title "AI Executor $GITHUB_REF_NAME"
+          --generate-notes
