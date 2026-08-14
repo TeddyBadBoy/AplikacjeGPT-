@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "pl.szponciciel.aiexecutor"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "pl.szponciciel.aiexecutor"
