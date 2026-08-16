@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
@@ -60,6 +61,11 @@ class MainActivity : Activity() {
             return
         }
 
+        if (isOrganizerCommand(query)) {
+            openOrganizer()
+            return
+        }
+
         val match = findLaunchableApp(query)
         if (match == null) {
             status.text = "Nie znalazłem aplikacji: $query"
@@ -80,6 +86,30 @@ class MainActivity : Activity() {
             status.text = "Nie mogę uruchomić: $appLabel"
         } catch (e: SecurityException) {
             status.text = "Android zablokował uruchomienie: $appLabel"
+        }
+    }
+
+    private fun isOrganizerCommand(query: String): Boolean {
+        val normalized = query.lowercase(Locale.ROOT).trim()
+        return normalized == "organizer" ||
+            normalized == "organizator" ||
+            normalized == "mailboard" ||
+            normalized == "adhd mailboard"
+    }
+
+    private fun openOrganizer() {
+        val organizerUrl = Uri.parse("https://teddybadboy.github.io/ADHD-SYSTEM/")
+        val intent = Intent(Intent.ACTION_VIEW, organizerUrl).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        status.text = "Otwieram Organizer"
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            status.text = "Brak aplikacji do otwarcia Organizera."
+        } catch (e: SecurityException) {
+            status.text = "Android zablokował otwarcie Organizera."
         }
     }
 
