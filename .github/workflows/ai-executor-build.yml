@@ -15,6 +15,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ai-executor-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -52,16 +56,55 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Prepare release APK
-        if: startsWith(github.ref, 'refs/tags/')
-        run: cp ai-executor/app/build/outputs/apk/debug/app-debug.apk "AI-Executor-${GITHUB_REF_NAME}-debug.apk"
+      - name: Describe release
+        id: release_meta
+        run: |
+          set -euo pipefail
+          version_name="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' ai-executor/app/build.gradle.kts | head -n 1)"
+          if [ -z "$version_name" ]; then
+            echo "Nie znalazlem versionName w ai-executor/app/build.gradle.kts" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+            title="AI Executor $GITHUB_REF_NAME"
+          else
+            tag="v${version_name}-build.${GITHUB_RUN_NUMBER}"
+            title="AI Executor $version_name (build $GITHUB_RUN_NUMBER)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Stage release APK
+        run: cp ai-executor/app/build/outputs/apk/debug/app-debug.apk AI-Executor-debug.apk
+
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          "AI-Executor-${GITHUB_REF_NAME}-debug.apk"
-          --title "AI Executor $GITHUB_REF_NAME"
-          --generate-notes
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release_meta.outputs.title }}
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum AI-Executor-debug.apk | cut -d ' ' -f 1)"
+          {
+            echo "Debugowy APK zbudowany automatycznie z ${GITHUB_REF_NAME}."
+            echo
+            echo "- commit: ${GITHUB_SHA}"
+            echo "- SHA-256: ${sha256}"
+            echo
+            echo "Zawsze najnowszy APK, bez wchodzenia w Actions:"
+            echo "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/AI-Executor-debug.apk"
+          } > release-notes.md
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" AI-Executor-debug.apk --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" AI-Executor-debug.apk \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --latest
+          fi
