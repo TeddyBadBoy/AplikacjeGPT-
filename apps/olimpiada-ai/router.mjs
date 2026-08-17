@@ -45,7 +45,7 @@ const RULES = [
 ];
 
 const HIGH_STAKES = [
-  'bezpieczeństwo', 'security', 'podatność', 'cve', 'prawo', 'prawny', 'medycz', 'zdrowie', 'finanse', 'podatek', 'pieniądze', 'produkcja', 'production'
+  'bezpieczeństwo', 'security', 'podatność', 'cve', 'prawo', 'prawny', 'medycz', 'zdrowie', 'finanse', 'podatek', 'pieniądze', 'produkc', 'production'
 ];
 
 const COMPLEXITY = [
