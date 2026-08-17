@@ -44,6 +44,12 @@ const RULES = [
   }
 ];
 
+const FRESH_RESEARCH = [
+  'aktualne', 'aktualny', 'aktualna', 'najnowsze', 'najnowszy', 'najnowsza',
+  'dzisiaj', 'teraz', 'cena', 'ceny', 'dokumentacja', 'api', 'news', 'wiadomości',
+  'wyszukaj', 'szukaj', 'research', 'źródła'
+];
+
 const HIGH_STAKES = [
   'bezpieczeństwo', 'security', 'podatność', 'cve', 'prawo', 'prawny', 'medycz', 'zdrowie', 'finanse', 'podatek', 'pieniądze', 'produkc', 'production'
 ];
@@ -72,6 +78,10 @@ export function scoreModels(input = '') {
 
   // Default: rozmowa i przygotowanie kontekstu zostają w ChatGPT.
   scores.chatgpt += 1;
+
+  // Świeże dane mają pierwszeństwo przy remisie z audytem/rozmową.
+  if (containsAny(text, FRESH_RESEARCH)) scores.perplexity += 1;
+
   return scores;
 }
 
@@ -114,6 +124,7 @@ function buildReason(input, mode, selected) {
   const reasons = [];
   if (containsAny(text, HIGH_STAKES)) reasons.push('temat wysokiej wagi → potrzebny drugi werdykt');
   if (containsAny(text, COMPLEXITY) || input.length > 4500) reasons.push('zadanie złożone → opłaca się model wykonawczy');
+  if (containsAny(text, FRESH_RESEARCH)) reasons.push('świeże dane mają pierwszeństwo');
   if (selected[0]?.id === 'perplexity') reasons.push('dominują świeże dane / źródła');
   if (selected[0]?.id === 'claude') reasons.push('dominują kod / architektura / wykonanie');
   if (selected[0]?.id === 'gemini') reasons.push('dominują dane multimodalne / Google');
