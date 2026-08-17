@@ -9,6 +9,11 @@ const research = routeTask('WYSZUKAJ aktualne ceny i dokumentację API z podanie
 assert.equal(research.mode, 'SOLO');
 assert.equal(research.selected[0].id, 'perplexity');
 
+const realPrompt = routeTask('Sprawdź aktualne możliwości ClickUp Brain i wymyśl jak odwzorować TickTick.', 'AUTO');
+assert.equal(realPrompt.mode, 'SOLO');
+assert.equal(realPrompt.selected[0].id, 'perplexity');
+assert.ok(realPrompt.scores.perplexity > realPrompt.scores.chatgpt);
+
 const audit = routeTask('AUDYT: sprawdź i zweryfikuj ten plan', 'AUTO');
 assert.equal(audit.selected[0].id, 'chatgpt');
 
