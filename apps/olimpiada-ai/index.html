@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Olimpiada AI — Router modeli</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">OLIMPIADA AI · MVP</p>
+      <h1>Jeden problem. Tylko tyle modeli, ile potrzeba.</h1>
+      <p class="lead">Router wybiera SOLO / DUEL / JURY i buduje minimalny wsad zamiast przepychać cały kontekst do każdego modelu.</p>
+    </header>
+
+    <section class="panel">
+      <label for="task">Zadanie</label>
+      <textarea id="task" rows="5" placeholder="Np. Zaimplementuj synchronizację TickTick → ClickUp i przygotuj test E2E."></textarea>
+
+      <label for="context">Kontekst</label>
+      <textarea id="context" rows="8" placeholder="Wklej tylko to, co już masz. Router skróci kontekst do paczki przekazywanej dalej."></textarea>
+
+      <div class="controls">
+        <div>
+          <label for="mode">Tryb</label>
+          <select id="mode">
+            <option value="AUTO">AUTO</option>
+            <option value="SOLO">SOLO</option>
+            <option value="DUEL">DUEL</option>
+            <option value="JURY">JURY</option>
+          </select>
+        </div>
+        <button id="route">WYBIERZ MODELE</button>
+      </div>
+    </section>
+
+    <section id="result" class="panel result" hidden>
+      <div class="result-head">
+        <div>
+          <p class="eyebrow">WERDYKT ROUTERA</p>
+          <h2 id="modeResult"></h2>
+        </div>
+        <button id="copy" class="secondary">KOPIUJ Wsad</button>
+      </div>
+
+      <p id="reason" class="reason"></p>
+      <div id="models" class="models"></div>
+
+      <label for="packet">Minimalny wsad</label>
+      <textarea id="packet" rows="16" readonly></textarea>
+      <p class="small">MVP nie wysyła nic do API modeli i nie przechowuje tokenów. To świadomy etap 1.</p>
+    </section>
+  </main>
+
+  <script type="module">
+    import { buildPacket } from './router.mjs';
+
+    const task = document.querySelector('#task');
+    const context = document.querySelector('#context');
+    const mode = document.querySelector('#mode');
+    const result = document.querySelector('#result');
+    const modeResult = document.querySelector('#modeResult');
+    const reason = document.querySelector('#reason');
+    const models = document.querySelector('#models');
+    const packet = document.querySelector('#packet');
+    const copy = document.querySelector('#copy');
+
+    document.querySelector('#route').addEventListener('click', () => {
+      const built = buildPacket({ task: task.value, context: context.value, requestedMode: mode.value });
+      modeResult.textContent = built.route.mode;
+      reason.textContent = built.route.reason;
+      models.innerHTML = built.route.selected.map((model, index) => `
+        <article class="model-card">
+          <span class="rank">${index + 1}</span>
+          <div><strong>${model.name}</strong><p>${model.role}</p></div>
+        </article>
+      `).join('');
+      packet.value = built.packet;
+      result.hidden = false;
+      result.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    copy.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(packet.value);
+      const original = copy.textContent;
+      copy.textContent = 'SKOPIOWANE';
+      setTimeout(() => copy.textContent = original, 1300);
+    });
+  </script>
+</body>
+</html>
